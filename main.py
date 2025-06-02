@@ -1,4 +1,4 @@
-import streamlit
+import streamlit as st
 import json
 import os
 from datetime import datetime
