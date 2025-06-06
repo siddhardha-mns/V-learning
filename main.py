@@ -55,12 +55,12 @@ def login_with_gitlab():
         "response_type": "code",
         "scope": "read_user"
     }
-    st.experimental_set_query_params()  # Clear any existing query params
+    st.query_params.clear()  # Clear any existing query params
     st.markdown(f"[Login with GitLab]({gitlab_auth_url}?{urlencode(params)})")
 
 def handle_gitlab_callback():
     """Handle the callback from GitLab after authentication"""
-    code = st.experimental_get_query_params().get("code", [None])[0]
+    code = st.query_params.get("code", [None])[0]
     if code:
         token_url = "https://code.swecha.org/oauth/token"
         token_data = {
@@ -79,7 +79,7 @@ def handle_gitlab_callback():
                 st.session_state.authenticated = True
                 st.session_state.current_user = user_info
                 st.success("✅ Login successful!")
-                st.experimental_set_query_params()  # Clear query params
+                st.query_params.clear()  # Clear query params
                 st.experimental_rerun()
         else:
             st.error("❌ Failed to authenticate with GitLab")
@@ -1066,7 +1066,7 @@ def main():
         st.session_state.is_admin = False
     
     # Handle GitLab OAuth callback
-    if st.experimental_get_query_params().get("code"):
+    if st.query_params.get("code"):
         handle_gitlab_callback()
     
     # Sidebar
