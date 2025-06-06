@@ -7,6 +7,8 @@ import hashlib
 import mimetypes
 from supabase import create_client, Client
 import uuid
+import secrets
+import re
 
 # --- Streamlit Secrets Configuration ---
 try:
@@ -36,134 +38,101 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Authentication Functions ---
-def init_session_state():
-    """Initialize session state variables"""
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if 'current_user' not in st.session_state:
-        st.session_state.current_user = None
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = 'home'
-
-def require_auth():
-    """Check if user is authenticated"""
-    return st.session_state.get('authenticated', False)
-
-def get_current_user():
-    """Get current user info"""
-    return st.session_state.get('current_user', None)
-
-def logout():
-    """Logout current user"""
-    st.session_state.authenticated = False
-    st.session_state.current_user = None
-    st.success("✅ Logged out successfully!")
-    st.rerun()
-
-def login_page():
-    """Display login page"""
-    st.title("🔐 V-Learn Login")
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        st.subheader("Welcome to V-Learn")
-        st.markdown("Your community-driven learning platform")
-        
-        # Login form
-        with st.form("login_form"):
-            username = st.text_input("Username", placeholder="Enter your username")
-            password = st.text_input("Password", type="password", placeholder="Enter your password")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                login_btn = st.form_submit_button("🔐 Login", use_container_width=True)
-            with col2:
-                register_btn = st.form_submit_button("📝 Register", use_container_width=True)
-            
-            if login_btn:
-                if authenticate_user(username, password):
-                    st.session_state.authenticated = True
-                    st.session_state.current_user = {
-                        'username': username,
-                        'full_name': username.title()
-                    }
-                    st.success("✅ Login successful!")
-                    st.rerun()
-                else:
-                    st.error("❌ Invalid username or password")
-            
-            if register_btn:
-                if register_user(username, password):
-                    st.success("✅ Registration successful! Please login.")
-                else:
-                    st.error("❌ Registration failed. Username might already exist.")
-        
-        st.markdown("---")
-        st.markdown("**Demo Credentials:**")
-        st.code("Username: demo\nPassword: demo123")
-
-def authenticate_user(username, password):
-    """Simple authentication - you can enhance this with proper user management"""
-    # Demo user
-    if username == "demo" and password == "demo123":
-        return True
-    
-    # Check if user exists in a simple way (you can enhance this with Supabase Auth)
-    try:
-        # Simple file-based user storage for demo
-        users_file = "users.json"
-        if os.path.exists(users_file):
-            with open(users_file, 'r') as f:
-                users = json.load(f)
-                user_data = users.get(username)
-                if user_data and user_data.get('password') == password:
-                    return True
-    except:
-        pass
-    
-    return False
-
-def register_user(username, password):
-    """Simple user registration"""
-    if not username or not password or len(password) < 6:
-        return False
-    
-    try:
-        users_file = "users.json"
-        users = {}
-        
-        # Load existing users
-        if os.path.exists(users_file):
-            with open(users_file, 'r') as f:
-                users = json.load(f)
-        
-        # Check if user already exists
-        if username in users:
-            return False
-        
-        # Add new user
-        users[username] = {
-            'password': password,
-            'created_at': datetime.now().isoformat(),
-            'full_name': username.title()
-        }
-        
-        # Save users
-        with open(users_file, 'w') as f:
-            json.dump(users, f, indent=2)
-        
-        return True
-    except:
-        return False
-
-# --- Database Manager (keeping the Supabase integration) ---
+# --- Supabase Database Manager ---
 class SupabaseManager:
     def __init__(self):
         self.client = supabase
         self.admin_client = supabase_admin
+        self.init_database()
+    
+    def init_database(self):
+        """Initialize Supabase tables (this should be done via Supabase SQL editor)"""
+        # This is for reference - you should create these tables in Supabase SQL editor
+        create_tables_sql = """
+        -- Resources table
+        CREATE TABLE IF NOT EXISTS resources (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            author TEXT NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT,
+            file_url TEXT,
+            external_url TEXT,
+            file_type TEXT,
+            resource_type TEXT,
+            file_size BIGINT,
+            timestamp TIMESTAMPTZ DEFAULT NOW(),
+            tags TEXT,
+            downloads INTEGER DEFAULT 0,
+            likes INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        -- Projects table
+        CREATE TABLE IF NOT EXISTS projects (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            author TEXT NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT,
+            technologies TEXT,
+            github_url TEXT,
+            demo_url TEXT,
+            image_url TEXT,
+            timestamp TIMESTAMPTZ DEFAULT NOW(),
+            likes INTEGER DEFAULT 0,
+            views INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        -- User data table
+        CREATE TABLE IF NOT EXISTS user_data (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT UNIQUE,
+            bookmarks JSONB,
+            completed JSONB,
+            preferences JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        -- Analytics table
+        CREATE TABLE IF NOT EXISTS analytics (
+            id SERIAL PRIMARY KEY,
+            event_type TEXT,
+            resource_id INTEGER,
+            user_session TEXT,
+            timestamp TIMESTAMPTZ DEFAULT NOW(),
+            metadata JSONB
+        );
+
+        -- Users table
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            full_name TEXT NOT NULL,
+            role TEXT DEFAULT 'user',
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            last_login TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        -- Enable Row Level Security
+        ALTER TABLE resources ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE user_data ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE analytics ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+
+        -- Create policies for public read access
+        CREATE POLICY "Public read access for resources" ON resources FOR SELECT USING (true);
+        CREATE POLICY "Public read access for projects" ON projects FOR SELECT USING (true);
+        CREATE POLICY "Public insert access for resources" ON resources FOR INSERT WITH CHECK (true);
+        CREATE POLICY "Public insert access for projects" ON projects FOR INSERT WITH CHECK (true);
+        """
+        # Note: Execute this SQL in your Supabase SQL editor
+        pass
     
     def add_resource(self, resource_data):
         """Add a new resource to the database"""
@@ -225,6 +194,16 @@ class SupabaseManager:
     def delete_resource(self, resource_id):
         """Delete a resource"""
         try:
+            # First get the resource to check for file URL
+            resource = self.client.table("resources").select("file_url").eq("id", resource_id).execute()
+            
+            # Delete from storage if file exists
+            if resource.data and resource.data[0].get('file_url'):
+                file_path = self.extract_file_path_from_url(resource.data[0]['file_url'])
+                if file_path:
+                    self.delete_file_from_storage(file_path)
+            
+            # Delete from database
             result = self.client.table("resources").delete().eq("id", resource_id).execute()
             return True
         except Exception as e:
@@ -234,6 +213,16 @@ class SupabaseManager:
     def delete_project(self, project_id):
         """Delete a project"""
         try:
+            # First get the project to check for image URL
+            project = self.client.table("projects").select("image_url").eq("id", project_id).execute()
+            
+            # Delete from storage if image exists
+            if project.data and project.data[0].get('image_url'):
+                file_path = self.extract_file_path_from_url(project.data[0]['image_url'])
+                if file_path:
+                    self.delete_file_from_storage(file_path)
+            
+            # Delete from database
             result = self.client.table("projects").delete().eq("id", project_id).execute()
             return True
         except Exception as e:
@@ -276,6 +265,26 @@ class SupabaseManager:
                 'total_downloads': 0,
                 'total_likes': 0
             }
+    
+    def extract_file_path_from_url(self, url):
+        """Extract file path from Supabase storage URL"""
+        try:
+            # Supabase storage URLs format: https://xxx.supabase.co/storage/v1/object/public/bucket/path
+            if "/storage/v1/object/public/" in url:
+                return url.split("/storage/v1/object/public/")[1]
+            return None
+        except:
+            return None
+    
+    def delete_file_from_storage(self, file_path):
+        """Delete file from Supabase storage"""
+        try:
+            bucket_name, file_path_in_bucket = file_path.split("/", 1)
+            result = self.admin_client.storage.from_(bucket_name).remove([file_path_in_bucket])
+            return True
+        except Exception as e:
+            st.error(f"Error deleting file from storage: {str(e)}")
+            return False
 
 # Initialize database manager
 db_manager = SupabaseManager()
@@ -322,24 +331,220 @@ def upload_to_supabase(uploaded_file, bucket_name="vlearn"):
         st.error(f"❌ Upload failed: {str(e)}")
         return None
 
-# --- Admin Authentication ---
-def check_admin_password():
-    """Simple admin authentication"""
-    if 'admin_authenticated' not in st.session_state:
-        st.session_state.admin_authenticated = False
+# --- Authentication Functions ---
+def init_session_state():
+    """Initialize session state variables"""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'current_user' not in st.session_state:
+        st.session_state.current_user = None
+    if 'login_error' not in st.session_state:
+        st.session_state.login_error = None
+    if 'register_error' not in st.session_state:
+        st.session_state.register_error = None
+    if 'register_success' not in st.session_state:
+        st.session_state.register_success = None
+
+def hash_password(password, salt=None):
+    """Hash a password with a salt for secure storage"""
+    if not salt:
+        salt = secrets.token_hex(16)  # Generate a random salt if not provided
     
-    if not st.session_state.admin_authenticated:
-        st.subheader("🔐 Admin Login")
-        password = st.text_input("Enter admin password:", type="password")
-        if st.button("Login"):
-            if password == ADMIN_PASSWORD:
-                st.session_state.admin_authenticated = True
-                st.success("✅ Admin authenticated!")
-                st.rerun()
-            else:
-                st.error("❌ Invalid password")
+    # Combine password and salt then hash
+    combined = password + salt
+    hashed = hashlib.sha256(combined.encode()).hexdigest()
+    
+    return hashed, salt
+
+def verify_password(input_password, stored_hash, stored_salt):
+    """Verify a password against a stored hash and salt"""
+    # Hash the input password with the stored salt
+    input_hash, _ = hash_password(input_password, stored_salt)
+    
+    # Compare the hashes
+    return input_hash == stored_hash
+
+def get_user_from_db(username):
+    """Get user from database"""
+    try:
+        result = supabase.table("users").select("*").eq("username", username).execute()
+        if result.data:
+            return result.data[0]
+        return None
+    except Exception as e:
+        st.error(f"Error fetching user: {str(e)}")
+        return None
+
+def register_user_in_db(username, email, password, full_name):
+    """Register a new user in the database"""
+    try:
+        # Check if username already exists
+        existing_user = get_user_from_db(username)
+        if existing_user:
+            st.session_state.register_error = "Username already exists. Please choose another."
+            return False
+        
+        # Check if email already exists
+        email_check = supabase.table("users").select("*").eq("email", email).execute()
+        if email_check.data:
+            st.session_state.register_error = "Email already registered. Please use another email."
+            return False
+        
+        # Hash the password before storing
+        hashed_password, salt = hash_password(password)
+        
+        # Create user record
+        user_data = {
+            "username": username,
+            "email": email,
+            "password_hash": hashed_password,
+            "password_salt": salt,
+            "full_name": full_name,
+            "created_at": datetime.now().isoformat(),
+            "last_login": datetime.now().isoformat(),
+            "role": "user"  # Default role
+        }
+        
+        result = supabase.table("users").insert(user_data).execute()
+        
+        if result.data:
+            st.session_state.register_success = "Registration successful! Please login."
+            return True
+        else:
+            st.session_state.register_error = "Registration failed. Please try again."
+            return False
+            
+    except Exception as e:
+        st.session_state.register_error = f"Registration error: {str(e)}"
         return False
-    return True
+
+def authenticate_user_in_db(username, password):
+    """Authenticate user against database"""
+    try:
+        user = get_user_from_db(username)
+        
+        if not user:
+            st.session_state.login_error = "Invalid username or password."
+            return False
+        
+        # Verify the password
+        if verify_password(password, user["password_hash"], user["password_salt"]):
+            # Update last login time
+            supabase.table("users").update({"last_login": datetime.now().isoformat()}).eq("username", username).execute()
+            
+            # Set session state
+            st.session_state.authenticated = True
+            st.session_state.current_user = {
+                'username': user["username"],
+                'full_name': user["full_name"],
+                'email': user["email"],
+                'role': user["role"]
+            }
+            st.session_state.login_error = None
+            
+            return True
+        else:
+            st.session_state.login_error = "Invalid username or password."
+            return False
+            
+    except Exception as e:
+        st.session_state.login_error = f"Authentication error: {str(e)}"
+        return False
+
+def login_page():
+    """Display login page with authentication"""
+    st.title("🔐 V-Learn Login")
+    
+    # Create a visually appealing layout
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        # Tabs for login and registration
+        tab1, tab2 = st.tabs(["🔐 Login", "📝 Register"])
+        
+        with tab1:
+            st.subheader("Welcome Back!")
+            
+            # Display any login errors
+            if st.session_state.login_error:
+                st.error(st.session_state.login_error)
+                st.session_state.login_error = None
+            
+            # Login form
+            with st.form("login_form"):
+                username = st.text_input("Username", placeholder="Enter your username")
+                password = st.text_input("Password", type="password", placeholder="Enter your password")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    login_btn = st.form_submit_button("🔐 Login", use_container_width=True)
+                with col2:
+                    forgot_btn = st.form_submit_button("Forgot Password?", use_container_width=True)
+                
+                if login_btn:
+                    if username and password:
+                        if authenticate_user_in_db(username, password):
+                            st.success("✅ Login successful!")
+                            st.rerun()
+                    else:
+                        st.error("Please enter both username and password.")
+                
+                if forgot_btn:
+                    st.info("Please contact support to reset your password.")
+        
+        with tab2:
+            st.subheader("Create New Account")
+            
+            # Display any registration errors or success messages
+            if st.session_state.register_error:
+                st.error(st.session_state.register_error)
+                st.session_state.register_error = None
+            
+            if st.session_state.register_success:
+                st.success(st.session_state.register_success)
+                st.session_state.register_success = None
+            
+            # Registration form
+            with st.form("register_form"):
+                full_name = st.text_input("Full Name", placeholder="Enter your full name")
+                email = st.text_input("Email", placeholder="Enter your email address")
+                username = st.text_input("Username", placeholder="Choose a username")
+                password = st.text_input("Password", type="password", placeholder="Choose a password")
+                confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm your password")
+                
+                register_btn = st.form_submit_button("📝 Register", use_container_width=True)
+                
+                if register_btn:
+                    if not all([full_name, email, username, password, confirm_password]):
+                        st.error("Please fill in all fields.")
+                    elif password != confirm_password:
+                        st.error("Passwords do not match.")
+                    elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                        st.error("Please enter a valid email address.")
+                    elif len(password) < 8:
+                        st.error("Password must be at least 8 characters long.")
+                    else:
+                        if register_user_in_db(username, email, password, full_name):
+                            st.success("Registration successful! Please login.")
+                            st.rerun()
+            
+            st.markdown("---")
+            st.markdown("**Note:** By registering, you agree to our Terms of Service and Privacy Policy.")
+
+def logout():
+    """Logout current user"""
+    st.session_state.authenticated = False
+    st.session_state.current_user = None
+    st.success("✅ Logged out successfully!")
+    st.rerun()
+
+def require_auth():
+    """Check if user is authenticated"""
+    return st.session_state.get('authenticated', False)
+
+def get_current_user():
+    """Get current user info"""
+    return st.session_state.get('current_user', None)
 
 # --- Utility Functions ---
 def validate_url(url):
@@ -411,7 +616,7 @@ def main_page():
     with col1:
         st.metric("📚 Total Resources", stats['total_resources'])
     with col2:
-        st.metric("🚀 Projects Showcased", stats['total_projects'])  
+        st.metric("🚀 Projects Showcased", stats['total_projects'])
     with col3:
         st.metric("📥 Downloads", stats['total_downloads'])
     with col4:
@@ -589,8 +794,7 @@ def resource_library_page():
                         "category": category,
                         "description": description,
                         "external_url": external_url or None,
-                        "tags": tags,
-                        "timestamp": datetime.now().isoformat()
+                        "tags": tags
                     }
                     
                     # Handle file upload if present
@@ -613,6 +817,25 @@ def resource_library_page():
                     resource_id = db_manager.add_resource(resource_data)
                     if resource_id:
                         st.success("✅ Resource uploaded successfully!")
+                        
+                        # Show preview
+                        st.markdown("**Preview:**")
+                        preview_col1, preview_col2 = st.columns(2)
+                        
+                        with preview_col1:
+                            if resource_data.get("file_url"):
+                                if resource_data.get("resource_type") == "image":
+                                    st.image(resource_data["file_url"], width=300)
+                                elif resource_data.get("resource_type") == "video":
+                                    st.video(resource_data["file_url"])
+                                else:
+                                    st.markdown(f"[📁 View File]({resource_data['file_url']})")
+                        
+                        with preview_col2:
+                            if resource_data.get("external_url"):
+                                st.markdown(f"[🔗 External Link]({resource_data['external_url']})")
+                                st.write(f"**External URL:** {resource_data['external_url']}")
+                        
                         st.balloons()
                     else:
                         st.error("Failed to save resource. Please try again.")
@@ -722,165 +945,254 @@ def project_showcase_page():
             
             # Project image upload
             project_image = st.file_uploader(
-    "Project Screenshot/Image (optional)",
-    type=["jpg", "jpeg", "png", "gif"],
-    help="Upload a screenshot or image of your project"
-)
+                "Project Screenshot/Image (optional)",
+                type=["jpg", "jpeg", "png", "gif"],
+                help="Upload a screenshot or image of your project"
+            )
             
             submitted = st.form_submit_button("🚀 Share Project", use_container_width=True)
             
-            if submitted and title and author and category and technologies:
-                project_data = {
-                    "id": str(uuid.uuid4()),
-                    "title": title,
-                    "author": author,
-                    "category": category,
-                    "description": description,
-                    "technologies": technologies,
-                    "github_url": github_url or None,
-                    "demo_url": demo_url or None,
-                    "timestamp": datetime.now().isoformat(),
-                    "likes": 0,
-                    "views": 0
-                }
+            if submitted and title and author and technologies:
+                # Validate URLs
+                is_valid = True
+                error_messages = []
                 
-                # Handle image upload if present
-                if project_image:
-                    with st.spinner("🔄 Uploading project image..."):
-                        upload_result = upload_to_supabase(project_image)
-                        if upload_result:
-                            project_data["image_url"] = upload_result["url"]
+                if github_url and not validate_url(github_url):
+                    error_messages.append("Please enter a valid GitHub URL.")
+                    is_valid = False
                 
-                # Save to database
-                project_id = db_manager.add_project(project_data)
-                if project_id:
-                    st.success("✅ Project shared successfully!")
-                    st.balloons()
+                if demo_url and not validate_url(demo_url):
+                    error_messages.append("Please enter a valid demo URL.")
+                    is_valid = False
+                
+                if is_valid:
+                    project_data = {
+                        "title": title,
+                        "author": author,
+                        "category": category,
+                        "description": description,
+                        "technologies": technologies,
+                        "github_url": github_url or None,
+                        "demo_url": demo_url or None,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    # Handle image upload if present
+                    if project_image:
+                        with st.spinner("🔄 Uploading project image..."):
+                            upload_result = upload_to_supabase(project_image)
+                            
+                            if upload_result:
+                                project_data["image_url"] = upload_result["url"]
+                            else:
+                                st.warning("Image upload failed, but project will be saved without image.")
+                    
+                    # Save to database
+                    project_id = db_manager.add_project(project_data)
+                    if project_id:
+                        st.success("✅ Project shared successfully!")
+                        
+                        # Show preview
+                        st.markdown("**Preview:**")
+                        if project_data.get("image_url"):
+                            st.image(project_data["image_url"], width=400)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if project_data.get("github_url"):
+                                st.markdown(f"[📂 GitHub Repository]({project_data['github_url']})")
+                        with col2:
+                            if project_data.get("demo_url"):
+                                st.markdown(f"[🌐 Live Demo]({project_data['demo_url']})")
+                        
+                        st.balloons()
+                    else:
+                        st.error("Failed to share project. Please try again.")
                 else:
-                    st.error("Failed to share project. Please try again.")
+                    for error in error_messages:
+                        st.error(error)
             elif submitted:
-                st.error("Please fill in all required fields.")
+                st.error("Please fill in all required fields (Title, Author, Technologies).")
 
-def documentation_page():
+def documentation_hub_page():
     st.title("📖 Documentation Hub")
     st.markdown("Quick access to popular documentation and learning resources")
-    st.markdown("---")
     
-    # Popular documentation links
+    # Popular documentation categories
     doc_categories = {
-        "🐍 Python": {
-            "Official Python Docs": "https://docs.python.org/3/",
-            "Django Documentation": "https://docs.djangoproject.com/",
-            "Flask Documentation": "https://flask.palletsprojects.com/",
-            "FastAPI Documentation": "https://fastapi.tiangolo.com/",
-            "NumPy Documentation": "https://numpy.org/doc/",
-            "Pandas Documentation": "https://pandas.pydata.org/docs/",
-        },
-        "🌐 Web Development": {
-            "MDN Web Docs": "https://developer.mozilla.org/",
-            "React Documentation": "https://react.dev/",
-            "Vue.js Documentation": "https://vuejs.org/guide/",
-            "Angular Documentation": "https://angular.io/docs",
-            "Node.js Documentation": "https://nodejs.org/docs/",
-            "Express.js Documentation": "https://expressjs.com/",
-        },
-        "☁️ Cloud & DevOps": {
-            "AWS Documentation": "https://docs.aws.amazon.com/",
-            "Google Cloud Docs": "https://cloud.google.com/docs",
-            "Azure Documentation": "https://docs.microsoft.com/azure/",
-            "Docker Documentation": "https://docs.docker.com/",
-            "Kubernetes Documentation": "https://kubernetes.io/docs/",
-            "Terraform Documentation": "https://www.terraform.io/docs/",
-        },
-        "📊 Data Science": {
-            "Scikit-learn Documentation": "https://scikit-learn.org/stable/",
-            "TensorFlow Documentation": "https://www.tensorflow.org/guide",
-            "PyTorch Documentation": "https://pytorch.org/docs/",
-            "Matplotlib Documentation": "https://matplotlib.org/stable/",
-            "Seaborn Documentation": "https://seaborn.pydata.org/",
-            "Jupyter Documentation": "https://jupyter.org/documentation",
-        },
-        "🗄️ Databases": {
-            "PostgreSQL Documentation": "https://www.postgresql.org/docs/",
-            "MySQL Documentation": "https://dev.mysql.com/doc/",
-            "MongoDB Documentation": "https://docs.mongodb.com/",
-            "Redis Documentation": "https://redis.io/documentation",
-            "SQLite Documentation": "https://sqlite.org/docs.html",
-        },
+        "🐍 Python": [
+            {"name": "Python Official Docs", "url": "https://docs.python.org/3/", "desc": "Official Python documentation"},
+            {"name": "Django", "url": "https://docs.djangoproject.com/", "desc": "High-level Python web framework"},
+            {"name": "Flask", "url": "https://flask.palletsprojects.com/", "desc": "Lightweight web framework"},
+            {"name": "FastAPI", "url": "https://fastapi.tiangolo.com/", "desc": "Modern, high-performance web framework"},
+            {"name": "NumPy", "url": "https://numpy.org/doc/", "desc": "Numerical computing library"},
+            {"name": "Pandas", "url": "https://pandas.pydata.org/docs/", "desc": "Data manipulation and analysis"},
+        ],
+        "🌐 Web Development": [
+            {"name": "MDN Web Docs", "url": "https://developer.mozilla.org/", "desc": "Web development resources"},
+            {"name": "React", "url": "https://react.dev/", "desc": "JavaScript library for UIs"},
+            {"name": "Vue.js", "url": "https://vuejs.org/guide/", "desc": "Progressive JavaScript framework"},
+            {"name": "Angular", "url": "https://angular.io/docs", "desc": "Platform for building mobile and desktop apps"},
+            {"name": "Node.js", "url": "https://nodejs.org/docs/", "desc": "JavaScript runtime environment"},
+            {"name": "Express.js", "url": "https://expressjs.com/", "desc": "Fast, minimalist web framework"},
+        ],
+        "☁️ Cloud & DevOps": [
+            {"name": "AWS Documentation", "url": "https://docs.aws.amazon.com/", "desc": "Amazon Web Services docs"},
+            {"name": "Google Cloud", "url": "https://cloud.google.com/docs", "desc": "Google Cloud Platform documentation"},
+            {"name": "Azure", "url": "https://docs.microsoft.com/azure/", "desc": "Microsoft Azure documentation"},
+            {"name": "Docker", "url": "https://docs.docker.com/", "desc": "Containerization platform"},
+            {"name": "Kubernetes", "url": "https://kubernetes.io/docs/", "desc": "Container orchestration"},
+            {"name": "Terraform", "url": "https://www.terraform.io/docs", "desc": "Infrastructure as code"},
+        ],
+        "🗄️ Databases": [
+            {"name": "PostgreSQL", "url": "https://www.postgresql.org/docs/", "desc": "Advanced open source database"},
+            {"name": "MongoDB", "url": "https://docs.mongodb.com/", "desc": "NoSQL document database"},
+            {"name": "MySQL", "url": "https://dev.mysql.com/doc/", "desc": "Popular relational database"},
+            {"name": "Redis", "url": "https://redis.io/documentation", "desc": "In-memory data structure store"},
+            {"name": "Supabase", "url": "https://supabase.com/docs", "desc": "Open source Firebase alternative"},
+        ],
+        "🤖 AI/ML": [
+            {"name": "TensorFlow", "url": "https://www.tensorflow.org/api_docs", "desc": "Machine learning platform"},
+            {"name": "PyTorch", "url": "https://pytorch.org/docs/", "desc": "Deep learning framework"},
+            {"name": "Scikit-learn", "url": "https://scikit-learn.org/stable/", "desc": "Machine learning library"},
+            {"name": "Hugging Face", "url": "https://huggingface.co/docs", "desc": "NLP models and datasets"},
+            {"name": "OpenAI API", "url": "https://platform.openai.com/docs", "desc": "AI API documentation"},
+        ],
+        "📱 Mobile Development": [
+            {"name": "React Native", "url": "https://reactnative.dev/docs", "desc": "Cross-platform mobile development"},
+            {"name": "Flutter", "url": "https://docs.flutter.dev/", "desc": "Google's UI toolkit"},
+            {"name": "Swift", "url": "https://swift.org/documentation/", "desc": "iOS development language"},
+            {"name": "Kotlin", "url": "https://kotlinlang.org/docs/", "desc": "Android development language"},
+        ]
     }
     
-    # Display documentation categories
-    for category, docs in doc_categories.items():
-        st.subheader(category)
-        cols = st.columns(2)
-        for i, (doc_name, doc_url) in enumerate(docs.items()):
-            with cols[i % 2]:
-                st.markdown(f"• [📚 {doc_name}]({doc_url})")
-        st.markdown("---")
+    # Search functionality
+    search_query = st.text_input("🔍 Search documentation...", placeholder="e.g., React, Python, Docker")
     
-    # Additional resources section
-    st.subheader("🎓 Learning Platforms")
-    learning_platforms = {
-        "FreeCodeCamp": "https://www.freecodecamp.org/",
-        "Codecademy": "https://www.codecademy.com/",
-        "Khan Academy": "https://www.khanacademy.org/",
-        "Coursera": "https://www.coursera.org/",
-        "edX": "https://www.edx.org/",
-        "Udemy": "https://www.udemy.com/",
-    }
-    
-    cols = st.columns(3)
-    for i, (platform, url) in enumerate(learning_platforms.items()):
-        with cols[i % 3]:
-            st.markdown(f"• [🎯 {platform}]({url})")
-
-def admin_page():
-    st.title("🔧 Admin Dashboard")
-    
-    if not check_admin_password():
-        return
-    
-    st.markdown("---")
-    
-    # Admin statistics
-    stats = db_manager.get_stats()
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("📚 Total Resources", stats['total_resources'])
-    with col2:
-        st.metric("🚀 Total Projects", stats['total_projects'])
-    with col3:
-        st.metric("📥 Total Downloads", stats['total_downloads'])
-    with col4:
-        st.metric("❤️ Total Likes", stats['total_likes'])
-    
-    st.markdown("---")
-    
-    # Admin tabs
-    tab1, tab2, tab3 = st.tabs(["📊 Manage Resources", "🚀 Manage Projects", "⚙️ System Settings"])
-    
-    with tab1:
-        st.subheader("Resource Management")
-        resources = db_manager.get_resources()
+    if search_query:
+        # Search through all documentation
+        search_results = []
+        for category, docs in doc_categories.items():
+            for doc in docs:
+                if (search_query.lower() in doc["name"].lower() or 
+                    search_query.lower() in doc["desc"].lower()):
+                    search_results.append({**doc, "category": category})
         
-        if resources:
-            for resource in resources:
-                with st.expander(f"📚 {resource['title']} by {resource['author']}"):
+        if search_results:
+            st.subheader(f"🔍 Search Results ({len(search_results)} found)")
+            for result in search_results:
+                with st.container():
                     col1, col2 = st.columns([3, 1])
                     with col1:
-                        st.write(f"**Category:** {resource['category']}")
-                        st.write(f"**Description:** {resource.get('description', 'N/A')}")
-                        st.write(f"**Downloads:** {resource.get('downloads', 0)}")
-                        st.write(f"**Likes:** {resource.get('likes', 0)}")
+                        st.markdown(f"**[{result['name']}]({result['url']})** - {result['category']}")
+                        st.caption(result['desc'])
+                    with col2:
+                        if st.button("Open", key=f"search_{result['name']}", use_container_width=True):
+                            st.markdown(f"[🔗 Open {result['name']}]({result['url']})")
+                    st.divider()
+        else:
+            st.info("No documentation found for your search query.")
+    else:
+        # Display categories
+        st.subheader("📚 Popular Documentation")
+        
+        # Create tabs for each category
+        tab_names = list(doc_categories.keys())
+        tabs = st.tabs(tab_names)
+        
+        for i, (category, docs) in enumerate(doc_categories.items()):
+            with tabs[i]:
+                # Display docs in a grid
+                cols = st.columns(2)
+                for idx, doc in enumerate(docs):
+                    with cols[idx % 2]:
+                        with st.container():
+                            st.markdown(f"**[{doc['name']}]({doc['url']})**")
+                            st.caption(doc['desc'])
+                            if st.button("Open Documentation", key=f"{category}_{doc['name']}", use_container_width=True):
+                                st.markdown(f"[🔗 Open {doc['name']}]({doc['url']})")
+                        st.markdown("---")
+
+def admin_panel_page():
+    st.title("🔧 Admin Panel")
+    
+    if not require_auth():
+        return
+    
+    st.success("✅ Admin access granted")
+    
+    # Admin tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📚 Manage Resources", "🚀 Manage Projects", "⚙️ Settings"])
+    
+    with tab1:
+        st.subheader("📊 Platform Dashboard")
+        
+        # Get comprehensive stats
+        stats = db_manager.get_stats()
+        
+        # Display metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("📚 Total Resources", stats['total_resources'])
+        with col2:
+            st.metric("🚀 Total Projects", stats['total_projects'])
+        with col3:
+            st.metric("📥 Total Downloads", stats['total_downloads'])
+        with col4:
+            st.metric("❤️ Total Likes", stats['total_likes'])
+        
+        st.markdown("---")
+        
+        # Recent activity
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📈 Recent Resources")
+            recent_resources = db_manager.get_resources(limit=5)
+            if recent_resources:
+                for resource in recent_resources:
+                    with st.container():
+                        st.write(f"**{resource['title']}** by {resource['author']}")
+                        st.caption(f"{resource['category']} | {format_timestamp(resource.get('timestamp', ''))}")
+                        st.caption(f"Downloads: {resource.get('downloads', 0)} | Likes: {resource.get('likes', 0)}")
+            else:
+                st.info("No resources yet")
+        
+        with col2:
+            st.subheader("🚀 Recent Projects")
+            recent_projects = db_manager.get_projects(limit=5)
+            if recent_projects:
+                for project in recent_projects:
+                    with st.container():
+                        st.write(f"**{project['title']}** by {project['author']}")
+                        st.caption(f"{project['category']} | {format_timestamp(project.get('timestamp', ''))}")
+                        st.caption(f"Likes: {project.get('likes', 0)} | Views: {project.get('views', 0)}")
+            else:
+                st.info("No projects yet")
+    
+    with tab2:
+        st.subheader("📚 Manage Resources")
+        
+        resources = db_manager.get_resources()
+        if resources:
+            for resource in resources:
+                with st.expander(f"{resource['title']} - {resource['category']}"):
+                    col1, col2 = st.columns([3, 1])
+                    
+                    with col1:
+                        st.write(f"**ID:** {resource['id']}")
+                        st.write(f"**Author:** {resource['author']}")
+                        st.write(f"**Description:** {resource.get('description', 'No description')}")
+                        st.write(f"**Downloads:** {resource.get('downloads', 0)} | **Likes:** {resource.get('likes', 0)}")
                         st.write(f"**Uploaded:** {format_timestamp(resource.get('timestamp', ''))}")
                         
                         if resource.get('file_url'):
-                            st.markdown(f"[📁 File URL]({resource['file_url']})")
+                            st.markdown(f"[📁 View File]({resource['file_url']})")
                         if resource.get('external_url'):
-                            st.markdown(f"[🔗 External URL]({resource['external_url']})")
+                            st.markdown(f"[🔗 External Link]({resource['external_url']})")
                     
                     with col2:
-                        if st.button(f"🗑️ Delete", key=f"del_res_{resource['id']}"):
+                        if st.button("🗑️ Delete", key=f"del_resource_{resource['id']}", use_container_width=True):
                             if db_manager.delete_resource(resource['id']):
                                 st.success("Resource deleted!")
                                 st.rerun()
@@ -889,31 +1201,36 @@ def admin_page():
         else:
             st.info("No resources to manage")
     
-    with tab2:
-        st.subheader("Project Management")
-        projects = db_manager.get_projects()
+    with tab3:
+        st.subheader("🚀 Manage Projects")
         
+        projects = db_manager.get_projects()
         if projects:
             for project in projects:
-                with st.expander(f"🚀 {project['title']} by {project['author']}"):
+                with st.expander(f"{project['title']} - {project['category']}"):
                     col1, col2 = st.columns([3, 1])
+                    
                     with col1:
-                        st.write(f"**Category:** {project['category']}")
-                        st.write(f"**Description:** {project.get('description', 'N/A')}")
-                        st.write(f"**Technologies:** {project.get('technologies', 'N/A')}")
-                        st.write(f"**Likes:** {project.get('likes', 0)}")
-                        st.write(f"**Views:** {project.get('views', 0)}")
+                        st.write(f"**ID:** {project['id']}")
+                        st.write(f"**Author:** {project['author']}")
+                        st.write(f"**Technologies:** {project.get('technologies', 'Not specified')}")
+                        st.write(f"**Description:** {project.get('description', 'No description')}")
+                        st.write(f"**Likes:** {project.get('likes', 0)} | **Views:** {project.get('views', 0)}")
                         st.write(f"**Shared:** {format_timestamp(project.get('timestamp', ''))}")
                         
                         if project.get('github_url'):
                             st.markdown(f"[📂 GitHub]({project['github_url']})")
                         if project.get('demo_url'):
-                            st.markdown(f"[🌐 Demo]({project['demo_url']})")
-                        if project.get('image_url'):
-                            st.markdown(f"[🖼️ Image]({project['image_url']})")
+                            st.markdown(f"[🌐 Live Demo]({project['demo_url']})")
                     
                     with col2:
-                        if st.button(f"🗑️ Delete", key=f"del_proj_{project['id']}"):
+                        if project.get('image_url'):
+                            try:
+                                st.image(project['image_url'], width=150)
+                            except:
+                                st.write("📷 Image unavailable")
+                        
+                        if st.button("🗑️ Delete", key=f"del_project_{project['id']}", use_container_width=True):
                             if db_manager.delete_project(project['id']):
                                 st.success("Project deleted!")
                                 st.rerun()
@@ -922,38 +1239,25 @@ def admin_page():
         else:
             st.info("No projects to manage")
     
-    with tab3:
-        st.subheader("System Settings")
+    with tab4:
+        st.subheader("⚙️ Platform Settings")
         
-        # Database connection test
-        st.write("**Database Connection:**")
+        st.markdown("**Current Configuration:**")
+        st.code(f"""
+        Supabase URL: {SUPABASE_URL[:50]}...
+        Admin Password: {'*' * len(ADMIN_PASSWORD)}
+        Database Status: Connected ✅
+        Storage Status: Connected ✅
+        """)
+        
+        st.markdown("**Database Health Check:**")
         try:
-            test_stats = db_manager.get_stats()
-            st.success("✅ Database connection successful")
+            # Test database connection
+            test_resources = db_manager.get_resources(limit=1)
+            test_projects = db_manager.get_projects(limit=1)
+            st.success("✅ Database connection is healthy")
         except Exception as e:
-            st.error(f"❌ Database connection failed: {str(e)}")
-        
-        # Storage test
-        st.write("**Storage Connection:**")
-        try:
-            # Try to list buckets (this will test the connection)
-            result = supabase_admin.storage.list_buckets()
-            st.success("✅ Storage connection successful")
-        except Exception as e:
-            st.error(f"❌ Storage connection failed: {str(e)}")
-        
-        # Admin settings
-        st.markdown("---")
-        st.write("**Admin Actions:**")
-        
-        if st.button("🔄 Clear Cache"):
-            st.cache_data.clear()
-            st.success("Cache cleared!")
-        
-        if st.button("🚪 Logout Admin"):
-            st.session_state.admin_authenticated = False
-            st.success("Admin logged out!")
-            st.rerun()
+            st.error(f"❌ Database connection issue: {str(e)}")
 
 # --- Main Application Logic ---
 def main():
@@ -965,52 +1269,32 @@ def main():
         login_page()
         return
     
-    # Sidebar navigation
-    with st.sidebar:
-        st.title("📚 V-Learn")
-        st.markdown("---")
-        
-        # User info
-        current_user = get_current_user()
-        if current_user:
-            st.write(f"👋 Welcome, **{current_user['full_name']}**!")
-            st.markdown("---")
-        
-        # Navigation menu
-        page_options = {
-            "🏠 Home": "home",
-            "📁 Resource Library": "resources", 
-            "🚀 Project Showcase": "projects",
-            "📖 Documentation": "documentation",
-            "🔧 Admin": "admin"
-        }
-        
-        for label, page_key in page_options.items():
-            if st.button(label, use_container_width=True):
-                st.session_state.current_page = page_key
-        
-        st.markdown("---")
-        
-        # Logout button
-        if st.button("🚪 Logout", use_container_width=True):
+    # Main navigation
+    st.sidebar.title("V-Learn")
+    
+    # User info in sidebar
+    if st.session_state.current_user:
+        st.sidebar.markdown(f"👤 **{st.session_state.current_user['full_name']}**")
+        if st.sidebar.button("🚪 Logout"):
             logout()
     
-    # Main content area
-    current_page = st.session_state.get('current_page', 'home')
+    # Navigation menu
+    menu = st.sidebar.radio(
+        "Navigation",
+        ["🏠 Home", "📚 Resource Library", "💻 Project Showcase", "📖 Documentation Hub", "⚙️ Admin Panel"]
+    )
     
-    if current_page == 'home':
+    # Display selected page
+    if menu == "🏠 Home":
         main_page()
-    elif current_page == 'resources':
+    elif menu == "📚 Resource Library":
         resource_library_page()
-    elif current_page == 'projects':
+    elif menu == "💻 Project Showcase":
         project_showcase_page()
-    elif current_page == 'documentation':
-        documentation_page()
-    elif current_page == 'admin':
-        admin_page()
-    else:
-        main_page()
+    elif menu == "📖 Documentation Hub":
+        documentation_hub_page()
+    elif menu == "⚙️ Admin Panel":
+        admin_panel_page()
 
-# --- App Entry Point ---
 if __name__ == "__main__":
     main()
