@@ -355,7 +355,7 @@ def get_gitlab_auth_url():
 
 def handle_gitlab_callback():
     """Handle GitLab OAuth callback"""
-    code = st.experimental_get_query_params().get("code", [None])[0]
+    code = st.query_params.get("code", [None])[0]
     if code:
         try:
             # Exchange code for access token
@@ -390,7 +390,7 @@ def handle_gitlab_callback():
             st.success(f"✅ Welcome, {user_data['name']}!")
             # Redirect to home page after successful login
             st.session_state.current_page = 'home'
-            st.experimental_rerun()
+            st.rerun()
 
         except Exception as e:
             st.error(f"Authentication failed: {str(e)}")
@@ -433,7 +433,7 @@ def login_page():
                 st.session_state.authenticated = True
                 st.session_state.current_user = {'role': 'admin'}
                 st.session_state.current_page = 'home'
-                st.experimental_rerun()
+                st.rerun()
 
 # --- Utility Functions ---
 def validate_url(url):
@@ -1159,13 +1159,13 @@ def main():
         st.session_state.current_user = None
     
     # Handle GitLab OAuth callback
-    if st.experimental_get_query_params().get("code"):
+    if st.query_params.get("code"):
         handle_gitlab_callback()
     
     # If not authenticated and not on login page, redirect to login
     if not st.session_state.authenticated and st.session_state.current_page != 'login':
         st.session_state.current_page = 'login'
-        st.experimental_rerun()
+        st.rerun()
     
     # Sidebar navigation (only show when authenticated)
     if st.session_state.authenticated:
@@ -1184,7 +1184,7 @@ def main():
                 st.session_state.authenticated = False
                 st.session_state.current_user = None
                 st.session_state.current_page = 'login'
-                st.experimental_rerun()
+                st.rerun()
             
             st.markdown("---")
             
