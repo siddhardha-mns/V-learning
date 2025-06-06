@@ -10,12 +10,20 @@ import uuid
 import requests
 from urllib.parse import urlencode
 
+# Page configuration must be the first Streamlit command
+st.set_page_config(
+    page_title="V-Learn",
+    page_icon="📚",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # --- GitLab OAuth Configuration ---
 GITLAB_URL = "https://code.swecha.org"
 GITLAB_API_URL = "https://code.swecha.org/api/v4"
-GITLAB_CLIENT_ID = os.getenv("GITLAB_CLIENT_ID")
-GITLAB_CLIENT_SECRET = os.getenv("GITLAB_CLIENT_SECRET")
-GITLAB_REDIRECT_URI = "https://v-learning.streamlit.app"  # Updated redirect URI
+GITLAB_CLIENT_ID = st.secrets["gitlab"]["client_id"]
+GITLAB_CLIENT_SECRET = st.secrets["gitlab"]["client_secret"]
+GITLAB_REDIRECT_URI = "https://v-learning.streamlit.app"
 
 # Verify GitLab configuration
 if not all([GITLAB_CLIENT_ID, GITLAB_CLIENT_SECRET]):
@@ -33,7 +41,7 @@ try:
     SUPABASE_URL = st.secrets["supabase"]["url"]
     SUPABASE_KEY = st.secrets["supabase"]["anon_key"]
     SUPABASE_SERVICE_KEY = st.secrets["supabase"]["service_role_key"]
-    ADMIN_PASSWORD = st.secrets.get("admin", {}).get("password")
+    ADMIN_PASSWORD = st.secrets["admin"]["password"]
     
 except Exception as e:
     # Local development fallback
