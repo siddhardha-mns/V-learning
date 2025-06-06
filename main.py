@@ -12,9 +12,10 @@ from urllib.parse import urlencode
 
 # --- GitLab OAuth Configuration ---
 GITLAB_URL = "https://code.swecha.org"
-GITLAB_CLIENT_ID = os.getenv("GITLAB_CLIENT_ID", "your_client_id")
-GITLAB_CLIENT_SECRET = os.getenv("GITLAB_CLIENT_SECRET", "your_client_secret")
-GITLAB_REDIRECT_URI = os.getenv("GITLAB_REDIRECT_URI", "https://v-learning.streamlit.app")
+GITLAB_API_URL = "https://code.swecha.org/api/v4"
+GITLAB_CLIENT_ID = os.getenv("GITLAB_CLIENT_ID")
+GITLAB_CLIENT_SECRET = os.getenv("GITLAB_CLIENT_SECRET")
+GITLAB_REDIRECT_URI = os.getenv("GITLAB_REDIRECT_URI")
 
 # --- Streamlit Secrets Configuration ---
 try:
@@ -22,15 +23,15 @@ try:
     SUPABASE_URL = st.secrets["supabase"]["url"]
     SUPABASE_KEY = st.secrets["supabase"]["anon_key"]
     SUPABASE_SERVICE_KEY = st.secrets["supabase"]["service_role_key"]
-    ADMIN_PASSWORD = st.secrets.get("admin", {}).get("password", "admin123")
+    ADMIN_PASSWORD = st.secrets.get("admin", {}).get("password")
     
 except Exception as e:
     # Local development fallback
     st.warning("⚠️ Streamlit secrets not found. Using environment variables for local development.")
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "your_supabase_url")
-    SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "your_anon_key")
-    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "your_service_key")
-    ADMIN_PASSWORD = "admin123"
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -349,54 +350,71 @@ def get_gitlab_auth_url():
         'client_id': GITLAB_CLIENT_ID,
         'redirect_uri': GITLAB_REDIRECT_URI,
         'response_type': 'code',
-        'scope': 'read_user'
+        'scope': 'read_user',
+        'state': str(uuid.uuid4())  # Add state parameter for security
     }
     return f"{GITLAB_URL}/oauth/authorize?{urlencode(params)}"
 
 def handle_gitlab_callback():
     """Handle GitLab OAuth callback"""
-    code = st.query_params.get("code", [None])[0]
-    if code:
+    try:
+        code = st.query_params.get("code", [None])[0]
+        state = st.query_params.get("state", [None])[0]
+        
+        if not code:
+            st.error("No authorization code received from GitLab")
+            return
+            
+        # Exchange code for access token
+        token_url = f"{GITLAB_URL}/oauth/token"
+        token_data = {
+            'client_id': GITLAB_CLIENT_ID,
+            'client_secret': GITLAB_CLIENT_SECRET,
+            'code': code,
+            'grant_type': 'authorization_code',
+            'redirect_uri': GITLAB_REDIRECT_URI
+        }
+        
         try:
-            # Exchange code for access token
-            token_url = f"{GITLAB_URL}/oauth/token"
-            token_data = {
-                'client_id': GITLAB_CLIENT_ID,
-                'client_secret': GITLAB_CLIENT_SECRET,
-                'code': code,
-                'grant_type': 'authorization_code',
-                'redirect_uri': GITLAB_REDIRECT_URI
-            }
             token_response = requests.post(token_url, data=token_data)
             token_response.raise_for_status()
             access_token = token_response.json()['access_token']
+        except requests.exceptions.RequestException as e:
+            st.error(f"Failed to get access token: {str(e)}")
+            if token_response.status_code == 400:
+                st.error("Invalid client ID or client secret. Please check your configuration.")
+            return
 
-            # Get user info
-            user_url = f"{GITLAB_URL}/api/v4/user"
+        # Get user info
+        try:
+            user_url = f"{GITLAB_API_URL}/user"
             headers = {'Authorization': f'Bearer {access_token}'}
             user_response = requests.get(user_url, headers=headers)
             user_response.raise_for_status()
             user_data = user_response.json()
+        except requests.exceptions.RequestException as e:
+            st.error(f"Failed to get user info: {str(e)}")
+            return
 
-            # Store user data in session
-            st.session_state.authenticated = True
-            st.session_state.current_user = {
-                'id': user_data['id'],
-                'username': user_data['username'],
-                'name': user_data['name'],
-                'email': user_data['email'],
-                'avatar_url': user_data.get('avatar_url')
-            }
-            st.success(f"✅ Welcome, {user_data['name']}!")
-            # Redirect to home page after successful login
-            st.session_state.current_page = 'home'
-            st.rerun()
+        # Store user data in session
+        st.session_state.authenticated = True
+        st.session_state.current_user = {
+            'id': user_data['id'],
+            'username': user_data['username'],
+            'name': user_data['name'],
+            'email': user_data['email'],
+            'avatar_url': user_data.get('avatar_url')
+        }
+        st.success(f"✅ Welcome, {user_data['name']}!")
+        # Redirect to home page after successful login
+        st.session_state.current_page = 'home'
+        st.rerun()
 
-        except Exception as e:
-            st.error(f"Authentication failed: {str(e)}")
-            st.session_state.authenticated = False
-            st.session_state.current_user = None
-            st.session_state.current_page = 'login'
+    except Exception as e:
+        st.error(f"Authentication failed: {str(e)}")
+        st.session_state.authenticated = False
+        st.session_state.current_user = None
+        st.session_state.current_page = 'login'
 
 def login_page():
     """Display the login page"""
@@ -426,6 +444,15 @@ def login_page():
             </a>
         </div>
         """, unsafe_allow_html=True)
+        
+        # Display configuration status
+        with st.expander("🔧 Configuration Status"):
+            st.code(f"""
+            GitLab URL: {GITLAB_URL}
+            Redirect URI: {GITLAB_REDIRECT_URI}
+            Client ID: {'✓ Configured' if GITLAB_CLIENT_ID != 'your_client_id' else '✗ Not configured'}
+            Client Secret: {'✓ Configured' if GITLAB_CLIENT_SECRET != 'your_client_secret' else '✗ Not configured'}
+            """)
         
         # Admin login option
         with st.expander("🛠️ Admin Access"):
