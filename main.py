@@ -15,7 +15,17 @@ GITLAB_URL = "https://code.swecha.org"
 GITLAB_API_URL = "https://code.swecha.org/api/v4"
 GITLAB_CLIENT_ID = os.getenv("GITLAB_CLIENT_ID")
 GITLAB_CLIENT_SECRET = os.getenv("GITLAB_CLIENT_SECRET")
-GITLAB_REDIRECT_URI = os.getenv("GITLAB_REDIRECT_URI")
+GITLAB_REDIRECT_URI = "https://v-learning.streamlit.app"  # Updated redirect URI
+
+# Verify GitLab configuration
+if not all([GITLAB_CLIENT_ID, GITLAB_CLIENT_SECRET]):
+    st.error("⚠️ GitLab OAuth configuration is incomplete. Please check your environment variables.")
+    st.info("Required environment variables:")
+    st.code("""
+    GITLAB_CLIENT_ID=your_client_id
+    GITLAB_CLIENT_SECRET=your_client_secret
+    """)
+    st.info("Redirect URI is set to: https://v-learning.streamlit.app")
 
 # --- Streamlit Secrets Configuration ---
 try:
@@ -346,20 +356,29 @@ def check_admin_password():
 # --- GitLab Authentication Functions ---
 def get_gitlab_auth_url():
     """Generate GitLab OAuth authorization URL"""
+    if not all([GITLAB_CLIENT_ID, GITLAB_CLIENT_SECRET]):
+        st.error("GitLab OAuth is not properly configured")
+        return None
+        
     params = {
         'client_id': GITLAB_CLIENT_ID,
         'redirect_uri': GITLAB_REDIRECT_URI,
         'response_type': 'code',
         'scope': 'read_user',
-        'state': str(uuid.uuid4())  # Add state parameter for security
+        'state': str(uuid.uuid4())
     }
-    return f"{GITLAB_URL}/oauth/authorize?{urlencode(params)}"
+    auth_url = f"{GITLAB_URL}/oauth/authorize?{urlencode(params)}"
+    st.write("Debug - Auth URL:", auth_url)
+    return auth_url
 
 def handle_gitlab_callback():
     """Handle GitLab OAuth callback"""
     try:
         code = st.query_params.get("code", [None])[0]
         state = st.query_params.get("state", [None])[0]
+        
+        st.write("Debug - Received code:", code)
+        st.write("Debug - Received state:", state)
         
         if not code:
             st.error("No authorization code received from GitLab")
@@ -375,40 +394,76 @@ def handle_gitlab_callback():
             'redirect_uri': GITLAB_REDIRECT_URI
         }
         
+        st.write("Debug - Token URL:", token_url)
+        st.write("Debug - Token Data:", {k: v for k, v in token_data.items() if k != 'client_secret'})
+        
         try:
-            token_response = requests.post(token_url, data=token_data)
+            # Add timeout and verify SSL
+            token_response = requests.post(
+                token_url, 
+                data=token_data,
+                timeout=10,
+                verify=True
+            )
+            st.write("Debug - Token Response Status:", token_response.status_code)
+            st.write("Debug - Token Response:", token_response.text)
+            
+            if token_response.status_code != 200:
+                st.error(f"Failed to get access token. Status code: {token_response.status_code}")
+                st.error(f"Response: {token_response.text}")
+                return
+                
             token_response.raise_for_status()
             access_token = token_response.json()['access_token']
+
+            # Get user info
+            try:
+                user_url = f"{GITLAB_API_URL}/user"
+                headers = {'Authorization': f'Bearer {access_token}'}
+                st.write("Debug - User URL:", user_url)
+                
+                # Add timeout and verify SSL
+                user_response = requests.get(
+                    user_url, 
+                    headers=headers,
+                    timeout=10,
+                    verify=True
+                )
+                st.write("Debug - User Response Status:", user_response.status_code)
+                st.write("Debug - User Response:", user_response.text)
+                
+                if user_response.status_code != 200:
+                    st.error(f"Failed to get user info. Status code: {user_response.status_code}")
+                    st.error(f"Response: {user_response.text}")
+                    return
+                
+                user_response.raise_for_status()
+                user_data = user_response.json()
+
+                # Store user data in session
+                st.session_state.authenticated = True
+                st.session_state.current_user = {
+                    'id': user_data['id'],
+                    'username': user_data['username'],
+                    'name': user_data['name'],
+                    'email': user_data['email'],
+                    'avatar_url': user_data.get('avatar_url')
+                }
+                st.success(f"✅ Welcome, {user_data['name']}!")
+                st.session_state.current_page = 'home'
+                st.rerun()
+
+            except requests.exceptions.RequestException as e:
+                st.error(f"Failed to get user info: {str(e)}")
+                if hasattr(e.response, 'text'):
+                    st.error(f"Response: {e.response.text}")
+                return
+
         except requests.exceptions.RequestException as e:
             st.error(f"Failed to get access token: {str(e)}")
-            if token_response.status_code == 400:
-                st.error("Invalid client ID or client secret. Please check your configuration.")
+            if hasattr(e.response, 'text'):
+                st.error(f"Response: {e.response.text}")
             return
-
-        # Get user info
-        try:
-            user_url = f"{GITLAB_API_URL}/user"
-            headers = {'Authorization': f'Bearer {access_token}'}
-            user_response = requests.get(user_url, headers=headers)
-            user_response.raise_for_status()
-            user_data = user_response.json()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Failed to get user info: {str(e)}")
-            return
-
-        # Store user data in session
-        st.session_state.authenticated = True
-        st.session_state.current_user = {
-            'id': user_data['id'],
-            'username': user_data['username'],
-            'name': user_data['name'],
-            'email': user_data['email'],
-            'avatar_url': user_data.get('avatar_url')
-        }
-        st.success(f"✅ Welcome, {user_data['name']}!")
-        # Redirect to home page after successful login
-        st.session_state.current_page = 'home'
-        st.rerun()
 
     except Exception as e:
         st.error(f"Authentication failed: {str(e)}")
@@ -430,29 +485,42 @@ def login_page():
         </div>
         """, unsafe_allow_html=True)
         
-        # GitLab login button
-        auth_url = get_gitlab_auth_url()
-        st.markdown(f"""
-        <div style='text-align: center; margin: 20px 0;'>
-            <a href="{auth_url}" target="_self">
-                <button style="background-color: #FC6D26; color: white; padding: 15px 30px; 
-                border: none; border-radius: 5px; cursor: pointer; font-size: 16px; 
-                display: inline-flex; align-items: center; gap: 10px;">
-                    <img src="https://about.gitlab.com/images/press/logo/svg/gitlab-icon-rgb.svg" 
-                    style="width: 24px; height: 24px;"> Login with GitLab
-                </button>
-            </a>
-        </div>
-        """, unsafe_allow_html=True)
-        
         # Display configuration status
         with st.expander("🔧 Configuration Status"):
             st.code(f"""
             GitLab URL: {GITLAB_URL}
             Redirect URI: {GITLAB_REDIRECT_URI}
-            Client ID: {'✓ Configured' if GITLAB_CLIENT_ID != 'your_client_id' else '✗ Not configured'}
-            Client Secret: {'✓ Configured' if GITLAB_CLIENT_SECRET != 'your_client_secret' else '✗ Not configured'}
+            Client ID: {'✓ Configured' if GITLAB_CLIENT_ID else '✗ Not configured'}
+            Client Secret: {'✓ Configured' if GITLAB_CLIENT_SECRET else '✗ Not configured'}
             """)
+            
+            # Test connection to GitLab
+            try:
+                response = requests.get(f"{GITLAB_URL}/api/v4/version", timeout=5, verify=True)
+                if response.status_code == 200:
+                    st.success("✅ Successfully connected to GitLab")
+                else:
+                    st.error(f"❌ Failed to connect to GitLab. Status code: {response.status_code}")
+            except Exception as e:
+                st.error(f"❌ Failed to connect to GitLab: {str(e)}")
+        
+        # GitLab login button
+        auth_url = get_gitlab_auth_url()
+        if auth_url:
+            st.markdown(f"""
+            <div style='text-align: center; margin: 20px 0;'>
+                <a href="{auth_url}" target="_self">
+                    <button style="background-color: #FC6D26; color: white; padding: 15px 30px; 
+                    border: none; border-radius: 5px; cursor: pointer; font-size: 16px; 
+                    display: inline-flex; align-items: center; gap: 10px;">
+                        <img src="https://about.gitlab.com/images/press/logo/svg/gitlab-icon-rgb.svg" 
+                        style="width: 24px; height: 24px;"> Login with GitLab
+                    </button>
+                </a>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.error("⚠️ GitLab login is not available due to configuration issues")
         
         # Admin login option
         with st.expander("🛠️ Admin Access"):
