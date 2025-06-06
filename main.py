@@ -370,14 +370,25 @@ def hash_password(password, salt=None):
     """Hash a password with a salt for secure storage"""
     if not salt:
         salt = secrets.token_hex(16)
-    combined = password + salt
-    hashed = hashlib.sha256(combined.encode()).hexdigest()
-    return hashed, salt
+    # Use a more secure hashing method
+    key = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000  # Number of iterations
+    )
+    return key.hex(), salt
 
 def verify_password(input_password, stored_hash, stored_salt):
     """Verify a password against a stored hash and salt"""
-    input_hash, _ = hash_password(input_password, stored_salt)
-    return input_hash == stored_hash
+    # Hash the input password with the stored salt
+    key = hashlib.pbkdf2_hmac(
+        'sha256',
+        input_password.encode('utf-8'),
+        stored_salt.encode('utf-8'),
+        100000  # Number of iterations
+    )
+    return key.hex() == stored_hash
 
 def get_user_from_db(username):
     """Get user from database"""
@@ -479,7 +490,28 @@ def authenticate_user_in_db(username, password):
             return False
             
     except Exception as e:
+        st.error(f"Authentication error: {str(e)}")  # Add this line for debugging
         st.session_state.login_error = f"Authentication error: {str(e)}"
+        return False
+
+def authenticate_admin(username, password):
+    """Authenticate admin user"""
+    try:
+        if username == st.secrets["admin"]["username"]:
+            # Verify the password using the new hashing system
+            stored_hash = st.secrets["admin"]["password_hash"]
+            stored_salt = st.secrets["admin"]["password_salt"]
+            
+            if verify_password(password, stored_hash, stored_salt):
+                st.session_state.authenticated = True
+                st.session_state.current_user = {
+                    'username': username,
+                    'role': 'admin'
+                }
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Admin authentication error: {str(e)}")
         return False
 
 def login_page():
