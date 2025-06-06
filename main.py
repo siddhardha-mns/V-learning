@@ -344,24 +344,39 @@ def init_session_state():
         st.session_state.register_error = None
     if 'register_success' not in st.session_state:
         st.session_state.register_success = None
+    if 'password_reset_email' not in st.session_state:
+        st.session_state.password_reset_email = None
+
+def validate_password(password):
+    """Validate password strength"""
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters long"
+    if not re.search(r"[A-Z]", password):
+        return False, "Password must contain at least one uppercase letter"
+    if not re.search(r"[a-z]", password):
+        return False, "Password must contain at least one lowercase letter"
+    if not re.search(r"\d", password):
+        return False, "Password must contain at least one number"
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+        return False, "Password must contain at least one special character"
+    return True, "Password is strong"
+
+def validate_email(email):
+    """Validate email format"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, email))
 
 def hash_password(password, salt=None):
     """Hash a password with a salt for secure storage"""
     if not salt:
-        salt = secrets.token_hex(16)  # Generate a random salt if not provided
-    
-    # Combine password and salt then hash
+        salt = secrets.token_hex(16)
     combined = password + salt
     hashed = hashlib.sha256(combined.encode()).hexdigest()
-    
     return hashed, salt
 
 def verify_password(input_password, stored_hash, stored_salt):
     """Verify a password against a stored hash and salt"""
-    # Hash the input password with the stored salt
     input_hash, _ = hash_password(input_password, stored_salt)
-    
-    # Compare the hashes
     return input_hash == stored_hash
 
 def get_user_from_db(username):
@@ -378,6 +393,22 @@ def get_user_from_db(username):
 def register_user_in_db(username, email, password, full_name):
     """Register a new user in the database"""
     try:
+        # Validate username
+        if len(username) < 3:
+            st.session_state.register_error = "Username must be at least 3 characters long"
+            return False
+        
+        # Validate email
+        if not validate_email(email):
+            st.session_state.register_error = "Please enter a valid email address"
+            return False
+        
+        # Validate password
+        is_valid, message = validate_password(password)
+        if not is_valid:
+            st.session_state.register_error = message
+            return False
+        
         # Check if username already exists
         existing_user = get_user_from_db(username)
         if existing_user:
@@ -402,7 +433,7 @@ def register_user_in_db(username, email, password, full_name):
             "full_name": full_name,
             "created_at": datetime.now().isoformat(),
             "last_login": datetime.now().isoformat(),
-            "role": "user"  # Default role
+            "role": "user"
         }
         
         result = supabase.table("users").insert(user_data).execute()
@@ -508,9 +539,18 @@ def login_page():
             with st.form("register_form"):
                 full_name = st.text_input("Full Name", placeholder="Enter your full name")
                 email = st.text_input("Email", placeholder="Enter your email address")
-                username = st.text_input("Username", placeholder="Choose a username")
+                username = st.text_input("Username", placeholder="Choose a username (min 3 characters)")
                 password = st.text_input("Password", type="password", placeholder="Choose a password")
                 confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm your password")
+                
+                # Password requirements
+                st.markdown("""
+                **Password Requirements:**
+                - At least 8 characters long
+                - Contains uppercase and lowercase letters
+                - Contains at least one number
+                - Contains at least one special character
+                """)
                 
                 register_btn = st.form_submit_button("📝 Register", use_container_width=True)
                 
@@ -519,17 +559,24 @@ def login_page():
                         st.error("Please fill in all fields.")
                     elif password != confirm_password:
                         st.error("Passwords do not match.")
-                    elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                    elif not validate_email(email):
                         st.error("Please enter a valid email address.")
-                    elif len(password) < 8:
-                        st.error("Password must be at least 8 characters long.")
                     else:
-                        if register_user_in_db(username, email, password, full_name):
-                            st.success("Registration successful! Please login.")
-                            st.rerun()
+                        is_valid, message = validate_password(password)
+                        if not is_valid:
+                            st.error(message)
+                        else:
+                            if register_user_in_db(username, email, password, full_name):
+                                st.success("Registration successful! Please login.")
+                                st.rerun()
             
             st.markdown("---")
-            st.markdown("**Note:** By registering, you agree to our Terms of Service and Privacy Policy.")
+            st.markdown("""
+            **Note:** By registering, you agree to our:
+            - Terms of Service
+            - Privacy Policy
+            - Code of Conduct
+            """)
 
 def logout():
     """Logout current user"""
