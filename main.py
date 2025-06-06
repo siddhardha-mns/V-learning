@@ -7,8 +7,6 @@ import hashlib
 import mimetypes
 from supabase import create_client, Client
 import uuid
-import secrets
-import re
 
 # --- Streamlit Secrets Configuration ---
 try:
@@ -105,25 +103,11 @@ class SupabaseManager:
             metadata JSONB
         );
 
-        -- Users table
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            password_salt TEXT NOT NULL,
-            full_name TEXT NOT NULL,
-            role TEXT DEFAULT 'user',
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            last_login TIMESTAMPTZ DEFAULT NOW()
-        );
-
         -- Enable Row Level Security
         ALTER TABLE resources ENABLE ROW LEVEL SECURITY;
         ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
         ALTER TABLE user_data ENABLE ROW LEVEL SECURITY;
         ALTER TABLE analytics ENABLE ROW LEVEL SECURITY;
-        ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 
         -- Create policies for public read access
         CREATE POLICY "Public read access for resources" ON resources FOR SELECT USING (true);
@@ -331,299 +315,24 @@ def upload_to_supabase(uploaded_file, bucket_name="vlearn"):
         st.error(f"❌ Upload failed: {str(e)}")
         return None
 
-# --- Authentication Functions ---
-def init_session_state():
-    """Initialize session state variables"""
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if 'current_user' not in st.session_state:
-        st.session_state.current_user = None
-    if 'login_error' not in st.session_state:
-        st.session_state.login_error = None
-    if 'register_error' not in st.session_state:
-        st.session_state.register_error = None
-    if 'register_success' not in st.session_state:
-        st.session_state.register_success = None
-    if 'password_reset_email' not in st.session_state:
-        st.session_state.password_reset_email = None
-
-def validate_password(password):
-    """Validate password strength"""
-    if len(password) < 8:
-        return False, "Password must be at least 8 characters long"
-    if not re.search(r"[A-Z]", password):
-        return False, "Password must contain at least one uppercase letter"
-    if not re.search(r"[a-z]", password):
-        return False, "Password must contain at least one lowercase letter"
-    if not re.search(r"\d", password):
-        return False, "Password must contain at least one number"
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
-        return False, "Password must contain at least one special character"
-    return True, "Password is strong"
-
-def validate_email(email):
-    """Validate email format"""
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    return bool(re.match(pattern, email))
-
-def hash_password(password, salt=None):
-    """Hash a password with a salt for secure storage"""
-    if not salt:
-        salt = secrets.token_hex(16)
-    # Use a more secure hashing method
-    key = hashlib.pbkdf2_hmac(
-        'sha256',
-        password.encode('utf-8'),
-        salt.encode('utf-8'),
-        100000  # Number of iterations
-    )
-    return key.hex(), salt
-
-def verify_password(input_password, stored_hash, stored_salt):
-    """Verify a password against a stored hash and salt"""
-    # Hash the input password with the stored salt
-    key = hashlib.pbkdf2_hmac(
-        'sha256',
-        input_password.encode('utf-8'),
-        stored_salt.encode('utf-8'),
-        100000  # Number of iterations
-    )
-    return key.hex() == stored_hash
-
-def get_user_from_db(username):
-    """Get user from database"""
-    try:
-        result = supabase.table("users").select("*").eq("username", username).execute()
-        if result.data:
-            return result.data[0]
-        return None
-    except Exception as e:
-        st.error(f"Error fetching user: {str(e)}")
-        return None
-
-def register_user_in_db(username, email, password, full_name):
-    """Register a new user in the database"""
-    try:
-        # Validate username
-        if len(username) < 3:
-            st.session_state.register_error = "Username must be at least 3 characters long"
-            return False
-        
-        # Validate email
-        if not validate_email(email):
-            st.session_state.register_error = "Please enter a valid email address"
-            return False
-        
-        # Validate password
-        is_valid, message = validate_password(password)
-        if not is_valid:
-            st.session_state.register_error = message
-            return False
-        
-        # Check if username already exists
-        existing_user = get_user_from_db(username)
-        if existing_user:
-            st.session_state.register_error = "Username already exists. Please choose another."
-            return False
-        
-        # Check if email already exists
-        email_check = supabase.table("users").select("*").eq("email", email).execute()
-        if email_check.data:
-            st.session_state.register_error = "Email already registered. Please use another email."
-            return False
-        
-        # Hash the password before storing
-        hashed_password, salt = hash_password(password)
-        
-        # Create user record
-        user_data = {
-            "username": username,
-            "email": email,
-            "password_hash": hashed_password,
-            "password_salt": salt,
-            "full_name": full_name,
-            "created_at": datetime.now().isoformat(),
-            "last_login": datetime.now().isoformat(),
-            "role": "user"
-        }
-        
-        result = supabase.table("users").insert(user_data).execute()
-        
-        if result.data:
-            st.session_state.register_success = "Registration successful! Please login."
-            return True
-        else:
-            st.session_state.register_error = "Registration failed. Please try again."
-            return False
-            
-    except Exception as e:
-        st.session_state.register_error = f"Registration error: {str(e)}"
-        return False
-
-def authenticate_user_in_db(username, password):
-    """Authenticate user against database"""
-    try:
-        user = get_user_from_db(username)
-        
-        if not user:
-            st.session_state.login_error = "Invalid username or password."
-            return False
-        
-        # Verify the password
-        if verify_password(password, user["password_hash"], user["password_salt"]):
-            # Update last login time
-            supabase.table("users").update({"last_login": datetime.now().isoformat()}).eq("username", username).execute()
-            
-            # Set session state
-            st.session_state.authenticated = True
-            st.session_state.current_user = {
-                'username': user["username"],
-                'full_name': user["full_name"],
-                'email': user["email"],
-                'role': user["role"]
-            }
-            st.session_state.login_error = None
-            
-            return True
-        else:
-            st.session_state.login_error = "Invalid username or password."
-            return False
-            
-    except Exception as e:
-        st.error(f"Authentication error: {str(e)}")  # Add this line for debugging
-        st.session_state.login_error = f"Authentication error: {str(e)}"
-        return False
-
-def authenticate_admin(username, password):
-    """Authenticate admin user"""
-    try:
-        if username == st.secrets["admin"]["username"]:
-            # Verify the password using the new hashing system
-            stored_hash = st.secrets["admin"]["password_hash"]
-            stored_salt = st.secrets["admin"]["password_salt"]
-            
-            if verify_password(password, stored_hash, stored_salt):
-                st.session_state.authenticated = True
-                st.session_state.current_user = {
-                    'username': username,
-                    'role': 'admin'
-                }
-                return True
-        return False
-    except Exception as e:
-        st.error(f"Admin authentication error: {str(e)}")
-        return False
-
-def login_page():
-    """Display login page with authentication"""
-    st.title("🔐 V-Learn Login")
+# --- Authentication ---
+def check_admin_password():
+    """Simple admin authentication"""
+    if 'admin_authenticated' not in st.session_state:
+        st.session_state.admin_authenticated = False
     
-    # Create a visually appealing layout
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        # Tabs for login and registration
-        tab1, tab2 = st.tabs(["🔐 Login", "📝 Register"])
-        
-        with tab1:
-            st.subheader("Welcome Back!")
-            
-            # Display any login errors
-            if st.session_state.login_error:
-                st.error(st.session_state.login_error)
-                st.session_state.login_error = None
-            
-            # Login form
-            with st.form("login_form"):
-                username = st.text_input("Username", placeholder="Enter your username")
-                password = st.text_input("Password", type="password", placeholder="Enter your password")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    login_btn = st.form_submit_button("🔐 Login", use_container_width=True)
-                with col2:
-                    forgot_btn = st.form_submit_button("Forgot Password?", use_container_width=True)
-                
-                if login_btn:
-                    if username and password:
-                        if authenticate_user_in_db(username, password):
-                            st.success("✅ Login successful!")
-                            st.rerun()
-                    else:
-                        st.error("Please enter both username and password.")
-                
-                if forgot_btn:
-                    st.info("Please contact support to reset your password.")
-        
-        with tab2:
-            st.subheader("Create New Account")
-            
-            # Display any registration errors or success messages
-            if st.session_state.register_error:
-                st.error(st.session_state.register_error)
-                st.session_state.register_error = None
-            
-            if st.session_state.register_success:
-                st.success(st.session_state.register_success)
-                st.session_state.register_success = None
-            
-            # Registration form
-            with st.form("register_form"):
-                full_name = st.text_input("Full Name", placeholder="Enter your full name")
-                email = st.text_input("Email", placeholder="Enter your email address")
-                username = st.text_input("Username", placeholder="Choose a username (min 3 characters)")
-                password = st.text_input("Password", type="password", placeholder="Choose a password")
-                confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm your password")
-                
-                # Password requirements
-                st.markdown("""
-                **Password Requirements:**
-                - At least 8 characters long
-                - Contains uppercase and lowercase letters
-                - Contains at least one number
-                - Contains at least one special character
-                """)
-                
-                register_btn = st.form_submit_button("📝 Register", use_container_width=True)
-                
-                if register_btn:
-                    if not all([full_name, email, username, password, confirm_password]):
-                        st.error("Please fill in all fields.")
-                    elif password != confirm_password:
-                        st.error("Passwords do not match.")
-                    elif not validate_email(email):
-                        st.error("Please enter a valid email address.")
-                    else:
-                        is_valid, message = validate_password(password)
-                        if not is_valid:
-                            st.error(message)
-                        else:
-                            if register_user_in_db(username, email, password, full_name):
-                                st.success("Registration successful! Please login.")
-                                st.rerun()
-            
-            st.markdown("---")
-            st.markdown("""
-            **Note:** By registering, you agree to our:
-            - Terms of Service
-            - Privacy Policy
-            - Code of Conduct
-            """)
-
-def logout():
-    """Logout current user"""
-    st.session_state.authenticated = False
-    st.session_state.current_user = None
-    st.success("✅ Logged out successfully!")
-    st.rerun()
-
-def require_auth():
-    """Check if user is authenticated"""
-    return st.session_state.get('authenticated', False)
-
-def get_current_user():
-    """Get current user info"""
-    return st.session_state.get('current_user', None)
+    if not st.session_state.admin_authenticated:
+        st.subheader("🔐 Admin Login")
+        password = st.text_input("Enter admin password:", type="password")
+        if st.button("Login"):
+            if password == ADMIN_PASSWORD:
+                st.session_state.admin_authenticated = True
+                st.success("✅ Admin authenticated!")
+                st.rerun()
+            else:
+                st.error("❌ Invalid password")
+        return False
+    return True
 
 # --- Utility Functions ---
 def validate_url(url):
@@ -1195,7 +904,7 @@ def documentation_hub_page():
 def admin_panel_page():
     st.title("🔧 Admin Panel")
     
-    if not require_auth():
+    if not check_admin_password():
         return
     
     st.success("✅ Admin access granted")
@@ -1341,39 +1050,66 @@ def admin_panel_page():
 # --- Main Application Logic ---
 def main():
     # Initialize session state
-    init_session_state()
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = 'home'
     
-    # Check authentication
-    if not require_auth():
-        login_page()
-        return
+    # Sidebar navigation
+    with st.sidebar:
+        st.title("📚 V-Learn")
+        st.markdown("---")
+        
+        # Navigation menu
+        menu_options = {
+            "🏠 Home": "home",
+            "📖 Documentation": "documentation", 
+            "📁 Resources": "resources",
+            "🚀 Projects": "projects",
+            "🔧 Admin": "admin"
+        }
+        
+        for label, page in menu_options.items():
+            if st.button(label, use_container_width=True):
+                st.session_state.current_page = page
+        
+        st.markdown("---")
+        
+        # Quick stats in sidebar
+        stats = db_manager.get_stats()
+        st.metric("📚 Resources", stats['total_resources'])
+        st.metric("🚀 Projects", stats['total_projects'])
+        
+        st.markdown("---")
+        st.markdown("**💡 Quick Tips:**")
+        st.caption("• Upload files or share links")
+        st.caption("• Showcase your projects")
+        st.caption("• Browse documentation")
+        st.caption("• Build and learn together!")
     
-    # Main navigation
-    st.sidebar.title("V-Learn")
+    # Main content area
+    current_page = st.session_state.current_page
     
-    # User info in sidebar
-    if st.session_state.current_user:
-        st.sidebar.markdown(f"👤 **{st.session_state.current_user['full_name']}**")
-        if st.sidebar.button("🚪 Logout"):
-            logout()
-    
-    # Navigation menu
-    menu = st.sidebar.radio(
-        "Navigation",
-        ["🏠 Home", "📚 Resource Library", "💻 Project Showcase", "📖 Documentation Hub", "⚙️ Admin Panel"]
-    )
-    
-    # Display selected page
-    if menu == "🏠 Home":
+    if current_page == 'home':
         main_page()
-    elif menu == "📚 Resource Library":
-        resource_library_page()
-    elif menu == "💻 Project Showcase":
-        project_showcase_page()
-    elif menu == "📖 Documentation Hub":
+    elif current_page == 'documentation':
         documentation_hub_page()
-    elif menu == "⚙️ Admin Panel":
+    elif current_page == 'resources':
+        resource_library_page()
+    elif current_page == 'projects':
+        project_showcase_page()
+    elif current_page == 'admin':
         admin_panel_page()
+    
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        """
+        <div style='text-align: center; color: #666; padding: 20px;'>
+        📚 V-Learn - Community Learning Platform | 
+        Built with ❤️ using Streamlit & Supabase
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
 
 if __name__ == "__main__":
     main()
