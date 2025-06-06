@@ -7,6 +7,14 @@ import hashlib
 import mimetypes
 from supabase import create_client, Client
 import uuid
+import requests
+from urllib.parse import urlencode
+
+# --- GitLab OAuth Configuration ---
+GITLAB_URL = "https://code.swecha.org"
+GITLAB_CLIENT_ID = os.getenv("GITLAB_CLIENT_ID", "your_client_id")
+GITLAB_CLIENT_SECRET = os.getenv("GITLAB_CLIENT_SECRET", "your_client_secret")
+GITLAB_REDIRECT_URI = os.getenv("GITLAB_REDIRECT_URI", "http://localhost:8501")
 
 # --- Streamlit Secrets Configuration ---
 try:
@@ -333,6 +341,99 @@ def check_admin_password():
                 st.error("❌ Invalid password")
         return False
     return True
+
+# --- GitLab Authentication Functions ---
+def get_gitlab_auth_url():
+    """Generate GitLab OAuth authorization URL"""
+    params = {
+        'client_id': GITLAB_CLIENT_ID,
+        'redirect_uri': GITLAB_REDIRECT_URI,
+        'response_type': 'code',
+        'scope': 'read_user'
+    }
+    return f"{GITLAB_URL}/oauth/authorize?{urlencode(params)}"
+
+def handle_gitlab_callback():
+    """Handle GitLab OAuth callback"""
+    code = st.experimental_get_query_params().get("code", [None])[0]
+    if code:
+        try:
+            # Exchange code for access token
+            token_url = f"{GITLAB_URL}/oauth/token"
+            token_data = {
+                'client_id': GITLAB_CLIENT_ID,
+                'client_secret': GITLAB_CLIENT_SECRET,
+                'code': code,
+                'grant_type': 'authorization_code',
+                'redirect_uri': GITLAB_REDIRECT_URI
+            }
+            token_response = requests.post(token_url, data=token_data)
+            token_response.raise_for_status()
+            access_token = token_response.json()['access_token']
+
+            # Get user info
+            user_url = f"{GITLAB_URL}/api/v4/user"
+            headers = {'Authorization': f'Bearer {access_token}'}
+            user_response = requests.get(user_url, headers=headers)
+            user_response.raise_for_status()
+            user_data = user_response.json()
+
+            # Store user data in session
+            st.session_state.authenticated = True
+            st.session_state.current_user = {
+                'id': user_data['id'],
+                'username': user_data['username'],
+                'name': user_data['name'],
+                'email': user_data['email'],
+                'avatar_url': user_data.get('avatar_url')
+            }
+            st.success(f"✅ Welcome, {user_data['name']}!")
+            # Redirect to home page after successful login
+            st.session_state.current_page = 'home'
+            st.experimental_rerun()
+
+        except Exception as e:
+            st.error(f"Authentication failed: {str(e)}")
+            st.session_state.authenticated = False
+            st.session_state.current_user = None
+            st.session_state.current_page = 'login'
+
+def login_page():
+    """Display the login page"""
+    st.title("🔐 Welcome to V-Learn")
+    
+    # Center the content
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.markdown("""
+        <div style='text-align: center;'>
+            <h2>Your Community Learning Platform</h2>
+            <p>Connect with GitLab to get started</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # GitLab login button
+        auth_url = get_gitlab_auth_url()
+        st.markdown(f"""
+        <div style='text-align: center; margin: 20px 0;'>
+            <a href="{auth_url}" target="_self">
+                <button style="background-color: #FC6D26; color: white; padding: 15px 30px; 
+                border: none; border-radius: 5px; cursor: pointer; font-size: 16px; 
+                display: inline-flex; align-items: center; gap: 10px;">
+                    <img src="https://about.gitlab.com/images/press/logo/svg/gitlab-icon-rgb.svg" 
+                    style="width: 24px; height: 24px;"> Login with GitLab
+                </button>
+            </a>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Admin login option
+        with st.expander("🛠️ Admin Access"):
+            if check_admin_password():
+                st.session_state.authenticated = True
+                st.session_state.current_user = {'role': 'admin'}
+                st.session_state.current_page = 'home'
+                st.experimental_rerun()
 
 # --- Utility Functions ---
 def validate_url(url):
@@ -1051,44 +1152,75 @@ def admin_panel_page():
 def main():
     # Initialize session state
     if 'current_page' not in st.session_state:
-        st.session_state.current_page = 'home'
+        st.session_state.current_page = 'login'  # Start with login page
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'current_user' not in st.session_state:
+        st.session_state.current_user = None
     
-    # Sidebar navigation
-    with st.sidebar:
-        st.title("📚 V-Learn")
-        st.markdown("---")
-        
-        # Navigation menu
-        menu_options = {
-            "🏠 Home": "home",
-            "📖 Documentation": "documentation", 
-            "📁 Resources": "resources",
-            "🚀 Projects": "projects",
-            "🔧 Admin": "admin"
-        }
-        
-        for label, page in menu_options.items():
-            if st.button(label, use_container_width=True):
-                st.session_state.current_page = page
-        
-        st.markdown("---")
-        
-        # Quick stats in sidebar
-        stats = db_manager.get_stats()
-        st.metric("📚 Resources", stats['total_resources'])
-        st.metric("🚀 Projects", stats['total_projects'])
-        
-        st.markdown("---")
-        st.markdown("**💡 Quick Tips:**")
-        st.caption("• Upload files or share links")
-        st.caption("• Showcase your projects")
-        st.caption("• Browse documentation")
-        st.caption("• Build and learn together!")
+    # Handle GitLab OAuth callback
+    if st.experimental_get_query_params().get("code"):
+        handle_gitlab_callback()
+    
+    # If not authenticated and not on login page, redirect to login
+    if not st.session_state.authenticated and st.session_state.current_page != 'login':
+        st.session_state.current_page = 'login'
+        st.experimental_rerun()
+    
+    # Sidebar navigation (only show when authenticated)
+    if st.session_state.authenticated:
+        with st.sidebar:
+            st.title("📚 V-Learn")
+            st.markdown("---")
+            
+            # User info
+            user = st.session_state.current_user
+            if user.get('role') == 'admin':
+                st.success("✅ Admin Access")
+            else:
+                st.success(f"✅ Welcome, {user.get('name', 'User')}!")
+            
+            if st.button("🚪 Logout"):
+                st.session_state.authenticated = False
+                st.session_state.current_user = None
+                st.session_state.current_page = 'login'
+                st.experimental_rerun()
+            
+            st.markdown("---")
+            
+            # Navigation menu
+            menu_options = {
+                "🏠 Home": "home",
+                "📖 Documentation": "documentation", 
+                "📁 Resources": "resources",
+                "🚀 Projects": "projects",
+                "🔧 Admin": "admin"
+            }
+            
+            for label, page in menu_options.items():
+                if st.button(label, use_container_width=True):
+                    st.session_state.current_page = page
+            
+            st.markdown("---")
+            
+            # Quick stats in sidebar
+            stats = db_manager.get_stats()
+            st.metric("📚 Resources", stats['total_resources'])
+            st.metric("🚀 Projects", stats['total_projects'])
+            
+            st.markdown("---")
+            st.markdown("**💡 Quick Tips:**")
+            st.caption("• Upload files or share links")
+            st.caption("• Showcase your projects")
+            st.caption("• Browse documentation")
+            st.caption("• Build and learn together!")
     
     # Main content area
     current_page = st.session_state.current_page
     
-    if current_page == 'home':
+    if current_page == 'login':
+        login_page()
+    elif current_page == 'home':
         main_page()
     elif current_page == 'documentation':
         documentation_hub_page()
@@ -1099,17 +1231,18 @@ def main():
     elif current_page == 'admin':
         admin_panel_page()
     
-    # Footer
-    st.markdown("---")
-    st.markdown(
-        """
-        <div style='text-align: center; color: #666; padding: 20px;'>
-        📚 V-Learn - Community Learning Platform | 
-        Built with ❤️ using Streamlit & Supabase
-        </div>
-        """, 
-        unsafe_allow_html=True
-    )
+    # Footer (only show when authenticated)
+    if st.session_state.authenticated:
+        st.markdown("---")
+        st.markdown(
+            """
+            <div style='text-align: center; color: #666; padding: 20px;'>
+            📚 V-Learn - Community Learning Platform | 
+            Built with ❤️ using Streamlit & Supabase
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
 
 if __name__ == "__main__":
     main()
