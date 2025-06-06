@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 GITLAB_URL = "https://code.swecha.org"
 GITLAB_CLIENT_ID = os.getenv("GITLAB_CLIENT_ID", "your_client_id")
 GITLAB_CLIENT_SECRET = os.getenv("GITLAB_CLIENT_SECRET", "your_client_secret")
-GITLAB_REDIRECT_URI = os.getenv("GITLAB_REDIRECT_URI", "http://localhost:8501")
+GITLAB_REDIRECT_URI = os.getenv("GITLAB_REDIRECT_URI", "https://v-learning.streamlit.app")
 
 # --- Streamlit Secrets Configuration ---
 try:
